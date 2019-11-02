@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"hash/fnv"
+	"io"
 	"io/ioutil"
 	"log"
 	"os"
@@ -108,11 +109,36 @@ func (c *MRCluster) worker() {
 					SafeClose(fs[i], bs[i])
 				}
 			} else {
-				// YOUR CODE HERE :)
-				// hint: don't encode results returned by ReduceF, and just output
-				// them into the destination file directly so that users can get
-				// results formatted as what they want.
-				panic("YOUR CODE HERE")
+				mpath := mergeName(t.dataDir, t.jobName, t.taskNumber)
+				file, buf := CreateFileAndBuf(mpath)
+				m := make(map[string][]string)
+				for i := 0; i < t.nMap; i++ {
+					rpath := reduceName(t.dataDir, t.jobName, i, t.taskNumber)
+					file, err := os.Open(rpath)
+					if err != nil {
+						log.Fatal(err)
+					}
+					dec := json.NewDecoder(file)
+					for {
+						var kv KeyValue
+						if err := dec.Decode(&kv); err == io.EOF {
+							break
+						} else if err != nil {
+							log.Fatal(err)
+						}
+						m[kv.Key] = append(m[kv.Key], kv.Value)
+					}
+					if err := os.Remove(rpath); err != nil { // TODO: delete later so it doesn't count in cost
+						log.Fatal(err)
+					}
+				}
+				for k, vals := range m {
+					result := t.reduceF(k, vals)
+					if _, err := buf.WriteString(result+"\n"); err != nil {
+						log.Fatal(err)
+					}
+				}
+				SafeClose(file, buf)
 			}
 			t.wg.Done()
 		case <-c.exit:
@@ -157,9 +183,27 @@ func (c *MRCluster) run(jobName, dataDir string, mapF MapF, reduceF ReduceF, map
 		t.wg.Wait()
 	}
 
-	// reduce phase
-	// YOUR CODE HERE :D
-	panic("YOUR CODE HERE")
+	tasks = make([]*task, 0, nReduce)
+	mpaths := make([]string, 0, nReduce)
+	for i := 0; i < nReduce; i++ {
+		t := &task{
+			dataDir:    dataDir,
+			jobName:    jobName,
+			phase:      reducePhase,
+			taskNumber: i,
+			nReduce:    nReduce,
+			nMap:       nMap,
+			reduceF: reduceF,
+		}
+		t.wg.Add(1)
+		tasks = append(tasks, t)
+		go func() { c.taskCh <- t }()
+		mpaths = append(mpaths, mergeName(dataDir, jobName, i))
+	}
+	for _, t := range tasks {
+		t.wg.Wait()
+	}
+	notify <- mpaths
 }
 
 func ihash(s string) int {
