@@ -53,6 +53,8 @@ type MRCluster struct {
 	wg       sync.WaitGroup
 	taskCh   chan *task
 	exit     chan struct{}
+	// delete intermediate files to recover disk space
+	intermediateFiles chan string
 }
 
 var singleton = &MRCluster{
@@ -128,9 +130,7 @@ func (c *MRCluster) worker() {
 						}
 						m[kv.Key] = append(m[kv.Key], kv.Value)
 					}
-					if err := os.Remove(rpath); err != nil { // TODO: delete later so it doesn't count in cost
-						log.Fatal(err)
-					}
+					c.intermediateFiles <- rpath
 				}
 				for k, vals := range m {
 					result := t.reduceF(k, vals)

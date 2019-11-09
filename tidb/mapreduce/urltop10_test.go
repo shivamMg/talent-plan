@@ -69,6 +69,17 @@ func testURLTop(t *testing.T, rounds RoundsArgs) {
 
 			runtime.GC()
 
+			var maxReducers int
+			for _, r := range rounds {
+				if r.NReduce > maxReducers {
+					maxReducers = r.NReduce
+				}
+			}
+			// total intermediate files = (no. of rounds)
+			// 								* (max no. of reducer go routines to be run in c.worker())
+			// 								* (max no. of input files in all the rounds)
+			mr.intermediateFiles = make(chan string, len(rounds) * maxReducers * len(c.MapFiles))  // using c.MapFiles since it'll be the largest across rounds
+
 			// run map-reduce rounds
 			begin := time.Now()
 			inputFiles := c.MapFiles
@@ -78,6 +89,13 @@ func testURLTop(t *testing.T, rounds RoundsArgs) {
 				inputFiles = <-ch
 			}
 			cost := time.Since(begin)
+
+			close(mr.intermediateFiles)
+			for filepath := range mr.intermediateFiles {
+				if err := os.Remove(filepath); err != nil {
+					log.Fatal(err)
+				}
+			}
 
 			// check result
 			if len(inputFiles) != 1 {
